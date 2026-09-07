@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect, useMemo } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useDragControls } from "framer-motion";
 import { X, Check } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { COLOR_THEMES, buildTheme, parseTheme } from "@/utils/theme/themeUtils";
@@ -10,6 +10,7 @@ export default function ThemeFeatureModal() {
   const [isOpen, setIsOpen] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const { theme, setTheme } = useTheme();
+  const dragControls = useDragControls();
 
   useEffect(() => {
     const hasSeen = localStorage.getItem("ratiod_seen_theme_feature_v9");
@@ -106,7 +107,7 @@ export default function ThemeFeatureModal() {
   return (
     <AnimatePresence>
       {isOpen && (
-        <div key="theme-feature-wrapper" className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center">
+        <div key="theme-feature-wrapper" data-lenis-prevent className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center">
           <motion.div
             key="theme-backdrop"
             initial={{ opacity: 0 }}
@@ -124,6 +125,8 @@ export default function ThemeFeatureModal() {
             exit={{ y: "100%", opacity: 0 }}
             transition={{ type: "spring", damping: 28, stiffness: 300 }}
             drag="y"
+            dragListener={false}
+            dragControls={dragControls}
             dragConstraints={{ top: 0, bottom: 0 }}
             dragElastic={{ top: 0, bottom: 0.5 }}
             onDragEnd={(_, info) => {
@@ -131,9 +134,13 @@ export default function ThemeFeatureModal() {
                 handleClose();
               }
             }}
-            className="relative w-full sm:max-w-md bg-theme-bg border-t sm:border border-theme-border rounded-t-[32px] sm:rounded-[32px] overflow-hidden shadow-2xl flex flex-col max-h-[85vh] sm:max-h-[80vh] transition-colors duration-400 ease-out z-10"
+            data-lenis-prevent
+            className="relative w-full sm:max-w-md bg-theme-bg border-t sm:border border-theme-border rounded-t-[32px] sm:rounded-[32px] overflow-hidden shadow-2xl flex flex-col max-h-[85vh] sm:max-h-[80vh] transition-colors duration-400 ease-out z-10 overscroll-contain"
           >
-            <div className="w-12 h-1.5 bg-theme-text-10 rounded-full mx-auto mt-3 mb-1 shrink-0 cursor-grab active:cursor-grabbing" />
+            <div 
+              onPointerDown={(e) => dragControls.start(e)}
+              className="w-12 h-1.5 bg-theme-text-10 rounded-full mx-auto mt-3 mb-1 shrink-0 cursor-grab active:cursor-grabbing sm:hidden touch-none" 
+            />
 
             <motion.div
               animate={{ 
@@ -167,7 +174,7 @@ export default function ThemeFeatureModal() {
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-2 space-y-6">
+              <div data-lenis-prevent className="flex-1 overflow-y-auto overscroll-contain touch-pan-y no-scrollbar px-6 py-2 space-y-6">
                 <div className="space-y-3">
                   <span
                     className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-muted px-1 block transition-colors duration-300"

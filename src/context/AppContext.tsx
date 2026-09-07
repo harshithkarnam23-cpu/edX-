@@ -275,22 +275,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.success) {
-          const isWrongCaptcha = data.detail === "wrong captcha, try the new one" || 
-            (typeof data.detail === "string" && data.detail.toLowerCase().includes("captcha"));
+          const detail = data.detail;
+          if (typeof detail === "object" && detail !== null) {
+            if (detail.type === "WRONG_CAPTCHA" || detail.type === "CAPTCHA_REQUIRED") {
+              const freshImage = detail.captcha_image || detail.image;
+              const freshDigest = detail.cdigest || detail.session;
+              if (freshImage && freshDigest) {
+                throw {
+                  type: "CAPTCHA_REQUIRED",
+                  image: freshImage,
+                  cdigest: freshDigest,
+                  message: detail.message || "Invalid captcha. Please enter the new one.",
+                };
+              }
+              const freshCapRes = await fetchWithLoadBalancer("/portal/captcha", { method: "POST" });
+              const freshCapData = await freshCapRes.json().catch(() => ({}));
+              throw {
+                type: "CAPTCHA_REQUIRED",
+                image: freshCapData.captcha_image || freshCapData.image,
+                cdigest: freshCapData.session,
+                message: detail.message || "Invalid captcha. Please enter the new one.",
+              };
+            }
+            throw detail;
+          }
+          const isWrongCaptcha = typeof detail === "string" && (detail.toLowerCase().includes("captcha") || detail === "wrong captcha, try the new one");
           if (isWrongCaptcha) {
             const freshCapRes = await fetchWithLoadBalancer("/portal/captcha", { method: "POST" });
             const freshCapData = await freshCapRes.json().catch(() => ({}));
             throw {
               type: "CAPTCHA_REQUIRED",
-              image: freshCapData.image,
+              image: freshCapData.captcha_image || freshCapData.image,
               cdigest: freshCapData.session,
-              message: "Please enter the security check characters.",
+              message: "Invalid captcha. Please enter the security check characters.",
             };
           }
-          if (typeof data.detail === "object" && data.detail !== null) {
-            throw data.detail;
-          }
-          throw new Error(data.detail || "Login failed");
+          throw new Error(typeof detail === "string" ? detail : "Login failed");
         }
 
         if (data.cookies) {

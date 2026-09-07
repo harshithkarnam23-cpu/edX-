@@ -68,29 +68,33 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           const data = await loginFn(creds);
           onLogin(data);
         } catch (err: any) {
-          if (err?.type === "CAPTCHA_REQUIRED") {
-            setCaptchaImage(err.image);
-            setCdigest(err.cdigest);
-            setError(err.message || "Please enter the CAPTCHA.");
+          const isCaptchaError = err?.type === "CAPTCHA_REQUIRED" || err?.type === "WRONG_CAPTCHA" || !!err?.image || !!err?.captcha_image;
+          if (isCaptchaError) {
+            setCaptchaImage(err.image || err.captcha_image);
+            setCdigest(err.cdigest || err.session);
+            setError(err.message || "Please enter the security check.");
             setCaptchaInput("");
           } else {
             setCaptchaImage(null);
             setCdigest(null);
-            setError(err.message || "auth failed");
+            const msg = typeof err === "string" ? err : err?.message || err?.detail || "Authentication failed.";
+            setError(msg);
           }
           setLoading(false);
         }
       }
     } catch (err: any) {
-      if (err?.type === "CAPTCHA_REQUIRED") {
-        setCaptchaImage(err.image);
-        setCdigest(err.cdigest);
-        setError(err.message || "Please enter the CAPTCHA.");
+      const isCaptchaError = err?.type === "CAPTCHA_REQUIRED" || err?.type === "WRONG_CAPTCHA" || !!err?.image || !!err?.captcha_image;
+      if (isCaptchaError) {
+        setCaptchaImage(err.image || err.captcha_image);
+        setCdigest(err.cdigest || err.session);
+        setError(err.message || "Please enter the security check.");
         setCaptchaInput("");
       } else {
         setCaptchaImage(null);
         setCdigest(null);
-        setError(err.message || "auth failed");
+        const msg = typeof err === "string" ? err : err?.message || err?.detail || "Authentication failed.";
+        setError(msg);
       }
       setLoading(false);
     }
@@ -277,9 +281,10 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
                     initial={{ opacity: 0, y: -10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0 }}
-                    className="absolute -top-8 left-0 text-red-400 font-mono text-xs uppercase flex items-center gap-2 whitespace-nowrap"
+                    className="mb-4 text-red-300 font-mono text-xs uppercase flex items-start gap-2 bg-red-950/50 border border-red-500/40 rounded-xl p-3"
                   >
-                    <AlertCircle size={14} /> {error}
+                    <AlertCircle size={15} className="shrink-0 mt-0.5 text-red-400" />
+                    <span className="leading-snug break-words">{error}</span>
                   </motion.div>
                 )}
               </AnimatePresence>

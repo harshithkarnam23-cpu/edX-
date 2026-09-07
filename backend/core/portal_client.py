@@ -20,8 +20,11 @@ LOGIN_SERVLET = BASE_URL + "/LoginServlet"
 FP_TOKEN_URL = BASE_URL + "/fpToken"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-    "Referer": "https://sp.srmist.edu.in/",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Referer": "https://sp.srmist.edu.in/srmiststudentportal/students/loginManager/youLogin.jsp",
+    "Origin": "https://sp.srmist.edu.in",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 _shared_transport = httpx.AsyncHTTPTransport(
@@ -46,7 +49,7 @@ def telemetry_payload():
         "screenHeight": 768,
         "colorDepth": 24,
         "devicePixelRatio": 1,
-        "platform": "Linux x86_64",
+        "platform": "Win32",
         "userAgent": HEADERS["User-Agent"],
         "language": "en-US",
         "hardwareConcurrency": 8,
@@ -156,20 +159,51 @@ class PortalSession:
         else:
             html = await self.get_attendance_html()
         if html is None:
-            reason = self.classify_failure(resp.url.path, body)
-            return {"ok": False, "reason": reason}
+            failure_info = self.classify_failure(resp.url.path, body)
+            return {
+                "ok": False,
+                "reason": failure_info.get("reason", "login_failed"),
+                "message": failure_info.get("message", "Login failed"),
+                "raw_body": body
+            }
         return {"ok": True, "cookies": {c.name: c.value for c in self.client.cookies.jar}}
 
     @staticmethod
     def classify_failure(path, body):
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(body, "html.parser")
+        alert_el = soup.find(class_=lambda c: c and "alert-icon-content" in c) or soup.find(class_=lambda c: c and "alert-danger" in c)
+        
+        if alert_el:
+            alert_text = alert_el.get_text(separator=" ", strip=True)
+            if alert_text.lower().startswith("alert"):
+                alert_text = alert_text[5:].strip()
+            
+            blob = alert_text.lower()
+            if "invalid captcha" in blob or "captcha" in blob:
+                return {
+                    "reason": "wrong_captcha",
+                    "message": alert_text or "Invalid captcha.",
+                }
+            if "locked" in blob:
+                return {
+                    "reason": "account_locked",
+                    "message": alert_text,
+                }
+            if "invalid login credentials" in blob or "attempts remaining" in blob or "invalid" in blob or "unsuccessful" in blob or "user id or password" in blob:
+                return {
+                    "reason": "invalid_credentials",
+                    "message": alert_text,
+                }
+            return {
+                "reason": "login_failed",
+                "message": alert_text,
+            }
+
         blob = body.lower()
-        if "invalid captcha" in blob or "enter valid captcha" in blob or "valid captcha" in blob:
-            return "wrong_captcha"
-        if "invalid username" in blob or "invalid password" in blob or "invalid credentials" in blob or "username or password" in blob:
-            return "invalid_credentials"
         if "session" in blob and ("expire" in blob or "timeout" in blob):
-            return "session_expired"
-        return "login_failed"
+            return {"reason": "session_expired", "message": "Session expired, refresh and retry."}
+        return {"reason": "login_failed", "message": "Login failed"}
 
     async def get_attendance_html(self):
         r = await self.client.get(ATT_URL)

@@ -500,7 +500,13 @@ async def portal_captcha(request: Request):
     _portal_captcha_sessions[sid] = session
     if len(_portal_captcha_sessions) > 20:
         _portal_captcha_sessions.clear()
-    return {"session": sid, **info}
+    return {
+        "session": sid,
+        "cdigest": sid,
+        "image": info.get("captcha_image"),
+        "captcha_image": info.get("captcha_image"),
+        **info
+    }
 
 
 @app.post("/portal/login")
@@ -538,7 +544,11 @@ async def portal_login(creds: PortalCredentials, request: Request):
 
     session = _portal_captcha_sessions.pop(creds.cdigest, None) if creds.cdigest else None
     if not session:
-        raise HTTPException(status_code=401, detail="captcha required")
+        session = PortalSession()
+        try:
+            await session.load_captcha()
+        except Exception:
+            raise HTTPException(status_code=503, detail="Portal unavailable right now.")
 
     netid = (creds.username or "").strip().split("@")[0]
     password = creds.password or ""
@@ -565,7 +575,12 @@ async def portal_login(creds: PortalCredentials, request: Request):
                     captcha_val = solved
                     login_res = res
                     break
-                if res.get("reason") == "wrong_captcha":
+                
+                if res.get("reason") in ["invalid_credentials", "account_locked"]:
+                    print(f"  -> [OCR] Credential error on portal. Halting retries immediately: {res.get('message')}", flush=True)
+                    login_res = res
+                    break
+                elif res.get("reason") == "wrong_captcha":
                     session = PortalSession()
                     await session.load_captcha()
                 else:
@@ -578,11 +593,7 @@ async def portal_login(creds: PortalCredentials, request: Request):
                 print(f"  -> [OCR] Portal login error: {e}", flush=True)
                 break
 
-    if not captcha_val:
-        _portal_captcha_sessions[creds.cdigest] = session
-        raise HTTPException(status_code=401, detail="wrong captcha, try the new one")
-
-    if not login_res:
+    if not login_res and captcha_val:
         try:
             login_res = await session.login(netid, password, captcha_val, telemetry=creds.telemetry)
         except (httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout, httpx.ReadError) as e:
@@ -590,17 +601,50 @@ async def portal_login(creds: PortalCredentials, request: Request):
             raise HTTPException(status_code=503, detail="Student Portal is unreachable or timing out. Please try again later.")
         except Exception as e:
             print(f"{get_now()}\n  -> [API] ERROR in /portal/login: {e}", flush=True)
-            raise HTTPException(status_code=401, detail="Invalid credentials")
+            raise HTTPException(status_code=401, detail={"type": "INVALID_CREDENTIALS", "message": "Invalid credentials"})
 
-    if not login_res.get("ok"):
-        reason = login_res.get("reason", "login_failed")
-        msg = {
-            "wrong_captcha": "wrong captcha, try the new one",
-            "invalid_credentials": "invalid credentials, check your netid/password",
-            "session_expired": "session expired, refresh the captcha and retry",
-        }.get(reason, "login failed")
-        _portal_captcha_sessions[creds.cdigest] = session
-        raise HTTPException(status_code=401, detail=msg)
+    if not login_res or not login_res.get("ok"):
+        reason = login_res.get("reason", "wrong_captcha") if login_res else "wrong_captcha"
+        msg = login_res.get("message") if login_res else None
+
+        fresh_session = PortalSession()
+        fresh_info = {}
+        try:
+            fresh_info = await fresh_session.load_captcha()
+        except Exception:
+            pass
+        new_sid = secrets.token_hex(8)
+        _portal_captcha_sessions[new_sid] = fresh_session
+
+        if reason == "wrong_captcha":
+            raise HTTPException(status_code=401, detail={
+                "type": "WRONG_CAPTCHA",
+                "message": msg or "Invalid captcha. Please enter the new one.",
+                "cdigest": new_sid,
+                "image": fresh_info.get("captcha_image"),
+                "captcha_image": fresh_info.get("captcha_image")
+            })
+        elif reason == "account_locked":
+            raise HTTPException(status_code=401, detail={
+                "type": "ACCOUNT_LOCKED",
+                "message": msg or "Your Student Portal account has been locked due to too many failed attempts.",
+            })
+        elif reason == "invalid_credentials":
+            raise HTTPException(status_code=401, detail={
+                "type": "INVALID_CREDENTIALS",
+                "message": msg or "Invalid login credentials. Make sure you are using your Student Portal password!",
+                "cdigest": new_sid,
+                "image": fresh_info.get("captcha_image"),
+                "captcha_image": fresh_info.get("captcha_image")
+            })
+        else:
+            raise HTTPException(status_code=401, detail={
+                "type": reason.upper(),
+                "message": msg or "Login failed.",
+                "cdigest": new_sid,
+                "image": fresh_info.get("captcha_image"),
+                "captcha_image": fresh_info.get("captcha_image")
+            })
 
     client = PortalClient(login_res["cookies"])
     try:
@@ -673,6 +717,9 @@ async def portal_refresh(creds: PortalCredentials, request: Request):
                             client.get_attendance_html(),
                             client.get_marks_data()
                         )
+                        break
+                    elif res.get("reason") in ["invalid_credentials", "account_locked"]:
+                        print(f"  -> [OCR] Aborting background re-auth to protect account from lockout: {res.get('message')}", flush=True)
                         break
                     else:
                         print(f"  -> [OCR] Portal background re-auth attempt {ocr_attempts} failed. Reason: {res.get('reason')}", flush=True)
