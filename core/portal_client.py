@@ -133,7 +133,8 @@ class PortalSession:
         if not self.captcha_page:
             await self.load_captcha()
         now_ms = int(time.time() * 1000)
-        elapsed_sec = 0 if self.load_ms is None else max(0, int((now_ms - self.load_ms) / 1000))
+        calc_elapsed = max(0, int((now_ms - (self.load_ms or now_ms)) / 1000))
+        elapsed_sec = max(random.randint(3, 5), calc_elapsed)
         dtoken = base64.b64encode("sp.srmist.edu.in"[::-1].encode()).decode()
         trap_payload = str(elapsed_sec) + (self.random_delimiter or "0000") + "3"
         cptoken = base64.b64encode(trap_payload.encode()).decode()
@@ -293,7 +294,7 @@ class PortalClient:
             print(f"  -> [PORTAL] Network error fetching profile: {e}", flush=True)
         return None
 
-    async def get_marks_data(self):
+    async def get_marks_data(self, att_html=None):
         try:
             r = await self.client.get(MARKS_URL)
             if r.status_code != 200 or "table" not in r.text.lower():
@@ -325,7 +326,6 @@ class PortalClient:
                 s.pop("status", None)
 
             try:
-                att_html = await self.get_attendance_html()
                 if att_html:
                     from services.portal_attendance_service import PortalAttendanceService
                     courses, _ = PortalAttendanceService.parse(att_html)
