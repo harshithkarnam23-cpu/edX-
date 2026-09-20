@@ -664,6 +664,20 @@ async def portal_login(creds: PortalCredentials, request: Request):
         print(f"  -> [PORTAL] Connect error fetching details after login: {e}", flush=True)
         att_html, marks, tt_html, prof_html = None, [], None, None
     courses, monthly = await asyncio.to_thread(PortalAttendanceService.parse, att_html) if att_html else ([], [])
+    if courses and marks:
+        mark_codes = {m.get("courseCode", "").strip().lower() for m in marks}
+        for c in courses:
+            c_code = c.get("code", "").strip()
+            if c_code.lower() not in mark_codes:
+                marks.append({
+                    "courseCode": c_code,
+                    "title": c.get("title", ""),
+                    "type": "Internal",
+                    "performance": "N/A",
+                    "assessments": [],
+                    "totalMarkGot": None,
+                    "totalMaxMarks": None
+                })
     schedule, course_map = PortalTimetableService.parse(tt_html) if tt_html else ({}, {})
     profile = PortalProfileService.parse(prof_html) if prof_html else None
     out = {
@@ -751,6 +765,20 @@ async def portal_refresh(creds: PortalCredentials, request: Request):
     if att_html is None:
         raise HTTPException(status_code=401, detail={"type": "SESSION_EXPIRED"})
     courses, monthly = await asyncio.to_thread(PortalAttendanceService.parse, att_html)
+    if courses and marks:
+        mark_codes = {m.get("courseCode", "").strip().lower() for m in marks}
+        for c in courses:
+            c_code = c.get("code", "").strip()
+            if c_code.lower() not in mark_codes:
+                marks.append({
+                    "courseCode": c_code,
+                    "title": c.get("title", ""),
+                    "type": "Internal",
+                    "performance": "N/A",
+                    "assessments": [],
+                    "totalMarkGot": None,
+                    "totalMaxMarks": None
+                })
     res = {
         "success": True,
         "isPortal": True,
