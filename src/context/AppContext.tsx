@@ -546,7 +546,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setUserData(parsed);
 
         runMigration().then(async () => {
-          const creds = await EncryptionUtils.loadDecrypted("ratio_credentials");
+          const creds = (await EncryptionUtils.loadDecrypted("ratio_credentials")) ||
+                        (await EncryptionUtils.loadDecrypted("portal_credentials"));
           if (creds && !hasRefreshed.current) {
             hasRefreshed.current = true;
             refreshData(creds as any, parsed);
