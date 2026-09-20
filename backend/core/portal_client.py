@@ -133,7 +133,7 @@ class PortalSession:
         if not self.captcha_page:
             await self.load_captcha()
         now_ms = int(time.time() * 1000)
-        elapsed_sec = max(0, int((now_ms - (self.load_ms or now_ms)) / 1000))
+        elapsed_sec = 0 if self.load_ms is None else max(0, int((now_ms - self.load_ms) / 1000))
         dtoken = base64.b64encode("sp.srmist.edu.in"[::-1].encode()).decode()
         trap_payload = str(elapsed_sec) + (self.random_delimiter or "0000") + "3"
         cptoken = base64.b64encode(trap_payload.encode()).decode()
@@ -154,7 +154,7 @@ class PortalSession:
         fp_body[self.captcha_field_name] = cptoken
         resp = await self.client.post(LOGIN_SERVLET, data=fp_body)
         body = resp.text or ""
-        if "logout.jsp" in resp.url.path or "attendance" in resp.url.path.lower():
+        if "logout.jsp" in resp.url.path or "attendance" in resp.url.path.lower() or "hrdsystem" in resp.url.path.lower():
             html = body
         else:
             html = await self.get_attendance_html()
@@ -206,10 +206,20 @@ class PortalSession:
         return {"reason": "login_failed", "message": "Login failed"}
 
     async def get_attendance_html(self):
-        r = await self.client.get(ATT_URL)
-        if r.status_code != 200 or "login_form" in r.text or "theGR8LoginLoader" in r.text:
+        try:
+            r = await self.client.get(ATT_URL)
+            if (
+                r.status_code != 200 
+                or "youlogin" in str(r.url).lower() 
+                or "login" in str(r.url).lower() 
+                or "loginform" in r.text.lower() 
+                or "login_form" in r.text.lower() 
+                or "thegr8loginloader" in r.text.lower()
+            ):
+                return None
+            return r.text
+        except Exception:
             return None
-        return r.text
 
 
     async def get_marks_html(self):
@@ -236,7 +246,14 @@ class PortalClient:
     async def get_attendance_html(self):
         try:
             r = await self.client.get(ATT_URL)
-            if r.status_code != 200 or "login_form" in r.text or "theGR8LoginLoader" in r.text:
+            if (
+                r.status_code != 200 
+                or "youlogin" in str(r.url).lower() 
+                or "login" in str(r.url).lower() 
+                or "loginform" in r.text.lower() 
+                or "login_form" in r.text.lower() 
+                or "thegr8loginloader" in r.text.lower()
+            ):
                 return None
             return r.text
         except Exception as e:

@@ -498,8 +498,15 @@ async def portal_captcha(request: Request):
         raise HTTPException(status_code=503, detail="Portal unavailable right now.")
     sid = secrets.token_hex(8)
     _portal_captcha_sessions[sid] = session
-    if len(_portal_captcha_sessions) > 20:
-        _portal_captcha_sessions.clear()
+    if len(_portal_captcha_sessions) > 50:
+        keys_to_remove = list(_portal_captcha_sessions.keys())[:15]
+        for k in keys_to_remove:
+            old_sess = _portal_captcha_sessions.pop(k, None)
+            if old_sess and hasattr(old_sess, "client"):
+                try:
+                    asyncio.create_task(old_sess.client.aclose())
+                except Exception:
+                    pass
     return {
         "session": sid,
         "cdigest": sid,
@@ -568,7 +575,6 @@ async def portal_login(creds: PortalCredentials, request: Request):
                     print("  -> [OCR] Portal OCR solver failed to predict captcha", flush=True)
                     break
                 print(f"  -> [OCR] Predicted: '{solved}'", flush=True)
-                await asyncio.sleep(2)
                 res = await session.login(netid, password, solved, telemetry=creds.telemetry)
                 if res.get("ok"):
                     print(f"  -> [OCR] Portal login successful on attempt {ocr_attempts}!", flush=True)
@@ -684,7 +690,6 @@ async def portal_refresh(creds: PortalCredentials, request: Request):
     if not creds.cookies:
         raise HTTPException(status_code=401, detail={"type": "SESSION_EXPIRED"})
     client = PortalClient(creds.cookies)
-    await client.keepalive()
     att_html, marks = await asyncio.gather(
         client.get_attendance_html(),
         client.get_marks_data()
@@ -700,14 +705,14 @@ async def portal_refresh(creds: PortalCredentials, request: Request):
             while ocr_attempts < 4:
                 ocr_attempts += 1
                 print(f"  -> [OCR] Portal background re-auth attempt {ocr_attempts}/4", flush=True)
+                session = PortalSession()
                 try:
-                    session = PortalSession()
                     await session.load_captcha()
                     ok, solved, _ = await solve_captcha_ocr_bytes(session.captcha_bytes)
                     if not ok or not solved:
+                        await session.client.aclose()
                         break
                     print(f"  -> [OCR] Predicted: '{solved}'", flush=True)
-                    await asyncio.sleep(2)
                     res = await session.login(netid, password, solved)
                     if res.get("ok"):
                         print(f"  -> [OCR] Portal background re-auth successful!", flush=True)
@@ -717,14 +722,28 @@ async def portal_refresh(creds: PortalCredentials, request: Request):
                             client.get_attendance_html(),
                             client.get_marks_data()
                         )
+                        await session.client.aclose()
                         break
                     elif res.get("reason") in ["invalid_credentials", "account_locked"]:
                         print(f"  -> [OCR] Aborting background re-auth to protect account from lockout: {res.get('message')}", flush=True)
+                        await session.client.aclose()
                         break
                     else:
                         print(f"  -> [OCR] Portal background re-auth attempt {ocr_attempts} failed. Reason: {res.get('reason')}", flush=True)
+                        await session.client.aclose()
+                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError) as e:
+                    print(f"  -> [PORTAL] Connection error during re-auth ({e}). Aborting retries.", flush=True)
+                    try:
+                        await session.client.aclose()
+                    except Exception:
+                        pass
+                    break
                 except Exception as e:
                     print(f"  -> [OCR] Background Portal re-auth error: {e}", flush=True)
+                    try:
+                        await session.client.aclose()
+                    except Exception:
+                        pass
 
             if not reauth_success:
                 print("  -> [OCR] Background Portal re-auth failed after 4 attempts", flush=True)
