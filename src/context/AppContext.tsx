@@ -244,7 +244,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const promise = (async () => {
       try {
         let digest = creds.cdigest;
-        if (!digest) {
+        if (!digest && creds.captcha) {
           const capRes = await fetchWithLoadBalancer("/portal/captcha", { method: "POST" });
           const capData = await capRes.json().catch(() => ({}));
           if (!capRes.ok || !capData.session) {
