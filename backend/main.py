@@ -30,6 +30,7 @@ from services.portal_attendance_service import PortalAttendanceService
 from services.portal_marks_service import PortalMarksService
 from services.portal_timetable_service import PortalTimetableService
 from services.portal_profile_service import PortalProfileService
+from services.calendar_service import CalendarService
 from dotenv import load_dotenv
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -129,17 +130,18 @@ async def custom_rate_limit_exceeded_handler(request: Request, exc: RateLimitExc
         content={"detail": "stop spamming blud"}
     )
 
-_dev_origins = ["http://localhost:3000", "http://localhost:3001", "http://localhost:9002", "http://localhost:9001", "http://localhost:9000"]
+_dev_origins = ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173", "http://localhost:9002", "http://localhost:9001", "http://localhost:9000"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://getratiod.lol",
-        "https://www.getratiod.lol",
-        "https://api.getratiod.lol",
+        "https://getedx.lol",
+        "https://www.getedx.lol",
+        "https://api.getedx.lol",
         *_dev_origins,
     ],
-    allow_origin_regex=r"https://.*\.getratiod\.lol",
+    allow_origin_regex=r"https://.*\.vercel\.app|https://.*\.getedx\.lol|http://localhost:\d+|http://127\.0\.0\.1:\d+|http://10\.\d+\.\d+\.\d+:\d+",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     max_age=86400,
@@ -173,7 +175,8 @@ async def security_middleware(request: Request, call_next):
     if os.getenv("ENV") == "development":
         return await call_next(request)
 
-    if request.url.path == "/feedback":
+    # Exclude public diagnostic and calendar routes from signature requirement
+    if request.url.path in ["/", "/health", "/version", "/calendar", "/calendar/today", "/feedback", "/docs", "/openapi.json", "/redoc"]:
         return await call_next(request)
 
     body = await request.body()
@@ -183,8 +186,8 @@ async def security_middleware(request: Request, call_next):
 
     request._receive = receive
 
-    sig = request.headers.get("X-Ratio-Sig", "")
-    if not verify_request(sig, body):
+    sig = request.headers.get("X-Edx-Sig") or request.headers.get("X-Ratio-Sig", "")
+    if HMAC_SECRET and not verify_request(sig, body):
         return PlainTextResponse(status_code=403, content="forbidden")
 
     return await call_next(request)
@@ -205,9 +208,38 @@ async def submit_feedback(request: Request):
         raise HTTPException(status_code=502, detail="failed to deliver")
     return {"ok": True}
 
+@app.get("/")
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "service": "edX Academic Engine",
+        "version": "2.0.0",
+        "endpoints": {
+            "portal_login": "/portal/login",
+            "portal_captcha": "/portal/captcha",
+            "portal_refresh": "/portal/refresh",
+            "academia_login": "/login",
+            "academia_refresh": "/refresh",
+            "calendar": "/calendar",
+            "calendar_today": "/calendar/today",
+            "pyq_proxy": "/pyq-proxy",
+            "announcements": "/api/announcements",
+            "version": "/version"
+        }
+    }
+
 @app.get("/version")
 async def get_version():
     return {"version": "2.0.0"}
+
+@app.get("/calendar")
+async def get_calendar():
+    return CalendarService.get_calendar_summary()
+
+@app.get("/calendar/today")
+async def get_calendar_today():
+    return CalendarService.get_today_info()
 
 @app.post("/captcha/solve")
 @limiter.limit("15/minute")
@@ -308,16 +340,19 @@ async def refresh_data(creds: Credentials, request: Request):
         if not creds.cookies:
             await client.authenticate(creds.captcha, creds.cdigest)
 
-        res_prof, res_g1, res_g2, res_att = await asyncio.gather(
+        res_prof, res_g1, res_g2, res_att, res_plan = await asyncio.gather(
             client.get_profile_html(),
             client.get_grid_html("Batch_1"),
             client.get_grid_html("batch_2"),
-            client.get_attendance_html()
+            client.get_attendance_html(),
+            client.get_planner_html(),
+            return_exceptions=True
         )
         profile_html = res_prof if isinstance(res_prof, str) else None
         g1_html = res_g1 if isinstance(res_g1, str) else None
         g2_html = res_g2 if isinstance(res_g2, str) else None
         att_html = res_att if isinstance(res_att, str) else None
+        plan_html = res_plan if isinstance(res_plan, str) else None
 
         session_dead = (profile_html is None or profile_html == "CONCURRENT_ERROR") and (att_html is None or att_html == "CONCURRENT_ERROR")
 
@@ -325,16 +360,19 @@ async def refresh_data(creds: Credentials, request: Request):
             print(f"{get_now()}\n  -> [AUTH] Session invalid or site glitch. Attempting re-auth...", flush=True)
             try:
                 await client.authenticate(creds.captcha, creds.cdigest)
-                res_prof, res_g1, res_g2, res_att = await asyncio.gather(
+                res_prof, res_g1, res_g2, res_att, res_plan = await asyncio.gather(
                     client.get_profile_html(),
                     client.get_grid_html("Batch_1"),
                     client.get_grid_html("batch_2"),
-                    client.get_attendance_html()
+                    client.get_attendance_html(),
+                    client.get_planner_html(),
+                    return_exceptions=True
                 )
                 profile_html = res_prof if isinstance(res_prof, str) else None
                 g1_html = res_g1 if isinstance(res_g1, str) else None
                 g2_html = res_g2 if isinstance(res_g2, str) else None
                 att_html = res_att if isinstance(res_att, str) else None
+                plan_html = res_plan if isinstance(res_plan, str) else None
                 session_dead = (profile_html is None or profile_html == "CONCURRENT_ERROR") and (att_html is None or att_html == "CONCURRENT_ERROR")
             except Exception as e:
                 err_msg = str(e)
@@ -352,6 +390,7 @@ async def refresh_data(creds: Credentials, request: Request):
         marks = MarksService.parse_test_performance(att_html)
         profile = ProfileService.parse_student_profile(profile_html) if profile_html else None
         courses = CourseService.get_course_map(profile_html) if profile_html else None
+        calendar = CalendarService.get_calendar_summary(plan_html)
 
         schedule = None
         if profile and courses:
@@ -368,6 +407,8 @@ async def refresh_data(creds: Credentials, request: Request):
             "success": True,
             "attendance": attendance,
             "marks": marks,
+            "calendar": calendar,
+            "dayOrder": calendar.get("dayOrder", "-"),
             "cookies": current_cookies,
         }
         if profile:
@@ -408,32 +449,38 @@ async def login(creds: LoginCredentials, request: Request):
         if not creds.cookies:
             await client.authenticate(creds.captcha, creds.cdigest)
             
-        res_prof, res_g1, res_g2, res_att = await asyncio.gather(
+        res_prof, res_g1, res_g2, res_att, res_plan = await asyncio.gather(
             client.get_profile_html(),
             client.get_grid_html("Batch_1"),
             client.get_grid_html("batch_2"),
-            client.get_attendance_html()
+            client.get_attendance_html(),
+            client.get_planner_html(),
+            return_exceptions=True
         )
         profile_html = res_prof if isinstance(res_prof, str) else None
         g1_html = res_g1 if isinstance(res_g1, str) else None
         g2_html = res_g2 if isinstance(res_g2, str) else None
         att_html = res_att if isinstance(res_att, str) else None
+        plan_html = res_plan if isinstance(res_plan, str) else None
 
         session_dead = (profile_html is None or profile_html == "CONCURRENT_ERROR")
 
         if session_dead:
             print(f"{get_now()}\n  -> [AUTH] Re-authenticating...", flush=True)
             await client.authenticate(creds.captcha, creds.cdigest)
-            res_prof, res_g1, res_g2, res_att = await asyncio.gather(
+            res_prof, res_g1, res_g2, res_att, res_plan = await asyncio.gather(
                 client.get_profile_html(),
                 client.get_grid_html("Batch_1"),
                 client.get_grid_html("batch_2"),
-                client.get_attendance_html()
+                client.get_attendance_html(),
+                client.get_planner_html(),
+                return_exceptions=True
             )
             profile_html = res_prof if isinstance(res_prof, str) else None
             g1_html = res_g1 if isinstance(res_g1, str) else None
             g2_html = res_g2 if isinstance(res_g2, str) else None
             att_html = res_att if isinstance(res_att, str) else None
+            plan_html = res_plan if isinstance(res_plan, str) else None
 
         if not profile_html:
             print(f"{get_now()}\n  -> [ACADEMIA] INFO: Authenticated successfully, but profile page is not yet operational.", flush=True)
@@ -441,6 +488,7 @@ async def login(creds: LoginCredentials, request: Request):
 
         profile = ProfileService.parse_student_profile(profile_html)
         course_map = CourseService.get_course_map(profile_html)
+        calendar = CalendarService.get_calendar_summary(plan_html)
         
         raw_batch = str(profile.get("batch", "1")).strip()
         actual_batch = raw_batch.split("/")[-1].strip() if "/" in raw_batch else raw_batch
@@ -464,6 +512,8 @@ async def login(creds: LoginCredentials, request: Request):
             "marks": marks,
             "schedule": schedule,
             "courses": course_map,
+            "calendar": calendar,
+            "dayOrder": calendar.get("dayOrder", "-"),
             "cookies": current_cookies,
         }
     except (httpx.NetworkError, httpx.TimeoutException) as e:
@@ -547,6 +597,9 @@ async def portal_login(creds: PortalCredentials, request: Request):
             res["courses"] = course_map
         if profile:
             res["profile"] = profile
+        cal_summary = CalendarService.get_calendar_summary()
+        res["calendar"] = cal_summary
+        res["dayOrder"] = cal_summary.get("dayOrder", "-")
         return res
 
     session = _portal_captcha_sessions.pop(creds.cdigest, None) if creds.cdigest else None
@@ -695,6 +748,9 @@ async def portal_login(creds: PortalCredentials, request: Request):
         out["courses"] = course_map
     if profile:
         out["profile"] = profile
+    cal_summary = CalendarService.get_calendar_summary()
+    out["calendar"] = cal_summary
+    out["dayOrder"] = cal_summary.get("dayOrder", "-")
     return out
 
 
@@ -788,6 +844,9 @@ async def portal_refresh(creds: PortalCredentials, request: Request):
     }
     if marks:
         res["marks"] = marks
+    cal_summary = CalendarService.get_calendar_summary()
+    res["calendar"] = cal_summary
+    res["dayOrder"] = cal_summary.get("dayOrder", "-")
     return res
 
 

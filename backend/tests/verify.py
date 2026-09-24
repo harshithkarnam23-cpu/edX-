@@ -5,9 +5,10 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from services.attendance_service_v2 import AttendanceService
+from services.attendance_service import AttendanceService
 from services.marks_service import MarksService
 from services.profile_service import ProfileService
+from services.calendar_service import CalendarService
 from core.academia_client import AcademiaClient
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
@@ -15,33 +16,43 @@ SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
 def run_offline_tests():
     failed = False
     
-    att_path = SNAPSHOT_DIR / "attendance_good.html"
-    if att_path.exists():
-        html = att_path.read_text(encoding="utf-8")
-        courses = AttendanceService.parse_attendance(html)
-        if not courses:
-            print("Offline: Attendance parsing failed.")
-            failed = True
-        else:
-            print(f"Offline: Attendance parsed {len(courses)} records.")
-            
-        marks = MarksService.parse_test_performance(html)
-        if not marks:
-            print("Offline: Marks parsing failed.")
-            failed = True
-        else:
-            print(f"Offline: Marks parsed {len(marks)} records.")
-            
-    prof_path = SNAPSHOT_DIR / "profile_good.html"
-    if prof_path.exists():
-        html = prof_path.read_text(encoding="utf-8")
-        profile = ProfileService.parse_student_profile(html)
-        if not profile or profile.get("regNo") == "Unknown":
-            print("Offline: Profile parsing failed.")
-            failed = True
-        else:
-            print(f"Offline: Profile parsed for {profile.get('regNo')}.")
-            
+    for att_file in ["attendance_good.html", "latest_failed_attendance.html"]:
+        att_path = SNAPSHOT_DIR / att_file
+        if att_path.exists():
+            html = att_path.read_text(encoding="utf-8")
+            courses = AttendanceService.parse_attendance(html)
+            if not courses:
+                print(f"Offline: Attendance parsing failed for {att_file}.")
+                failed = True
+            else:
+                print(f"Offline: Attendance parsed {len(courses)} records from {att_file}.")
+                
+            marks = MarksService.parse_test_performance(html)
+            if not marks:
+                print(f"Offline: Marks parsing failed for {att_file}.")
+                failed = True
+            else:
+                print(f"Offline: Marks parsed {len(marks)} records from {att_file}.")
+                
+    for prof_file in ["profile_good.html", "latest_failed_profile.html"]:
+        prof_path = SNAPSHOT_DIR / prof_file
+        if prof_path.exists():
+            html = prof_path.read_text(encoding="utf-8")
+            profile = ProfileService.parse_student_profile(html)
+            if not profile or profile.get("regNo") == "Unknown":
+                print(f"Offline: Profile parsing failed for {prof_file}.")
+                failed = True
+            else:
+                print(f"Offline: Profile parsed for {profile.get('regNo')} from {prof_file}.")
+                
+    # Also verify calendar service
+    cal_summary = CalendarService.get_calendar_summary()
+    if not cal_summary.get("events"):
+        print("Offline: Calendar events missing.")
+        failed = True
+    else:
+        print(f"Offline: Calendar loaded {len(cal_summary.get('events', []))} events, today is {cal_summary.get('dayOrder')}.")
+
     if failed:
         sys.exit(1)
     print("All offline tests passed.")

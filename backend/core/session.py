@@ -9,7 +9,7 @@ class SessionHandler:
     def __init__(self, cookies=None):
         self.client = httpx.AsyncClient(transport=_shared_transport, headers=HEADERS, follow_redirects=True, timeout=30.0)
         if cookies:
-            print("  -> [SESSION] Injected existing cookies from frontend.", flush=True)
+            print("  -> [SESSION] Injected existing cookies from client.", flush=True)
             self.client.cookies.update(cookies)
 
     async def force_logout_sessions(self, html_content):
